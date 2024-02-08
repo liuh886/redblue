@@ -1,0 +1,11 @@
+# Core Jupyter functionality
+jupyter
+jupyterlab
+ipywidgets
+
+# Common data analysis and visualization libraries
+matplotlib
+seaborn
+plotly
+# Optional: Include other specific libraries your notebooks depend on
+# scipy
