@@ -19,7 +19,7 @@ async def test_process_data():
     assert response.status_code == 200
     response_data = response.json()
     assert "filtered_value" in response_data  # Replace 'filtered_value' with the actual field name in your response model
+    assert response_data['filtered_value'] == 0.0
     # Add more assertions as necessary to validate the response content
-
     # Optionally, verify database interactions, such as ensuring data was saved correctly
     # This might involve querying your test database and comparing the results with expected values

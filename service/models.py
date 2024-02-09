@@ -1,12 +1,12 @@
 from pydantic import BaseModel
 from datetime import datetime
 
-class DataModel(BaseModel):
-    timestamp: datetime
-    value: float
-    # Add other relevant fields for your data
 
-class ProcessedDataModel(BaseModel):
-    timestamp: datetime
-    filtered_value: float  # Assuming the Kalman Filter processes a 'value'
-    # Add additional fields as needed
+class CirculationInfo(BaseModel):
+    RameId: str
+    TrainNumber: str
+    TravelDate: datetime
+    Origin: str
+    Destination: str
+    Status: str
+    # Include other fields from the Circulations table as needed
