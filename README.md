@@ -17,6 +17,7 @@ my_kalman_project/
 │   ├── main.py                        # FastAPI app creation, routes, and config
 │   ├── dependencies.py                # Dependencies for routes (DB connections, etc.)
 │   ├── models.py                      # Pydantic models for request/response validation
+│   ├── train.py                       # Train object, which is the physical instance of the Kalman Filter
 │   └── database.py                    # Database interaction, async DB setup
 │
 ├── visualization/                     # Visualization and evaluation of Kalman Filter results
