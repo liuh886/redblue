@@ -7,20 +7,20 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 import pytest
 from httpx import AsyncClient
 from datetime import datetime, timedelta
-from service.main import app 
-from service.train_service import Train
+from service.apps.tracker import kf_tracker 
+from service.func.train_service import Train
 from unittest.mock import patch, AsyncMock
 
 @pytest.mark.asyncio
 async def test_get_trains():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(app=kf_tracker, base_url="http://test") as ac:
         response = await ac.get("/trains/")
     assert response.status_code == 200
     assert isinstance(response.json(), dict)  # Assuming the endpoint returns a dictionary of trains
 
 @pytest.mark.asyncio
 async def test_get_circulations():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(app=kf_tracker, base_url="http://test") as ac:
         response = await ac.get("/circulations/")
     print(response.json())
     assert response.status_code == 200
@@ -48,7 +48,7 @@ async def test_get_train_by_id():
     with patch("database.fetch_rame_info", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = mock_train
 
-        async with AsyncClient(app=app, base_url="http://test") as ac:
+        async with AsyncClient(app=kf_tracker, base_url="http://test") as ac:
             response = await ac.get(f"/trains/{train_id}")
         
         assert response.status_code == 200
@@ -57,7 +57,7 @@ async def test_get_train_by_id():
 @pytest.mark.asyncio
 async def test_delete_train():
     train_id = 22  # Use an actual train ID that exists in your test dataset
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(app=kf_tracker, base_url="http://test") as ac:
         response = await ac.delete(f"/trains/{train_id}")
     assert response.status_code == 200
     # You might want to add additional checks to ensure the train was indeed deleted
