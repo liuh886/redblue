@@ -3,6 +3,7 @@ numpy>=1.18.5
 pandas>=2.0.0
 pyarrow >= 5.0.0
 filterpy==1.4.5
+utm == 0.7.0
 
 # fastapi related
 fastapi==0.75.0

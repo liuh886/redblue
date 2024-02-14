@@ -3,7 +3,7 @@
 from databases import Database
 from sqlalchemy import create_engine, MetaData
 import os
-from typing import Optional, List
+from typing import Optional, Sequence
 from datetime import datetime
 from typing import Union
 
@@ -37,47 +37,49 @@ async def disconnect_from_database():
 
 # Update by timestamp
 ## ICOMERA Table Operations TODO: Support Noman 
-async def fetch_gps_update(last_timestamp: datetime)-> List[dict]:
+async def fetch_gps_update(last_timestamp: datetime, end_timestamp: datetime)-> Sequence:
     # Construct the query to fetch only records newer than the last_timestamp
     query = f"""
-    SELECT "systemid", "timestamp", "latitude", "longitude", "altitude", "speed", "heading", "quality", "metaData.satellites", "metaData.lock"
+    SELECT "systemid", "latitude", "longitude", "altitude", "speed", "heading", "metaData.lock", "metaData.satellites", "quality", "timestamp"
     FROM "{DB_SCHEMA}"."icomera"
-    WHERE "timestamp" > :last_timestamp
+    WHERE "timestamp" > :last_timestamp AND "timestamp" <= :end_timestamp
     ORDER BY "timestamp" ASC
     """
-    return await database.fetch_all(query=query, values={"last_timestamp": last_timestamp})
+    return await database.fetch_all(query=query, values={"last_timestamp": last_timestamp,
+                                                         "end_timestamp": end_timestamp})
 
 ## TrainRunningInformation_MainTable_4005 Operations TODO: Support UK Rail network
-async def fetch_beacon_update(last_timestamp: datetime)-> List[dict]:
+async def fetch_beacon_update(last_timestamp: datetime, end_timestamp: datetime)-> Sequence:
     # Construct the query similarly
     query = f"""
-    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "ReferencedLocationDateTime", "MessageDateTime"
+    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "CountryCodeISO", "MessageDateTime"
     FROM "{DB_SCHEMA}"."TrainRunningInformation_MainTable_4005"
-    WHERE "LocationDateTime" > :last_timestamp
+    WHERE "LocationDateTime" > :last_timestamp AND "LocationDateTime" <= :end_timestamp
     ORDER BY "LocationDateTime" ASC
     """
-    return await database.fetch_all(query=query, values={"last_timestamp": last_timestamp})
+    return await database.fetch_all(query=query, values={"last_timestamp": last_timestamp,
+                                                         "end_timestamp": end_timestamp})
 
 
 # Query historical by train id / date
-async def fetch_gps(systemid_list: list, start: datetime, end: datetime)-> List[dict]:
+async def fetch_gps(systemid_list: list, start: datetime, end: datetime)-> Sequence:
     # Convert the list of systemids into a string format suitable for SQL IN clause
     systemid_str = ",".join(f"'{item}'" for item in systemid_list)
 
     query = f"""
-    SELECT "systemid", "timestamp", "latitude", "longitude", "altitude", "speed", "heading", "quality", "metaData.satellites", "metaData.lock"
+    SELECT "systemid", "latitude", "longitude", "altitude", "speed", "heading", "metaData.lock", "metaData.satellites", "quality", "timestamp"
     FROM "{DB_SCHEMA}"."icomera"
     WHERE "systemid" IN ({systemid_str}) AND "timestamp" BETWEEN :start AND :end
     ORDER BY "timestamp" ASC
     """
     return await database.fetch_all(query=query, values={"start": start, "end": end})
 
-async def fetch_beacon(train_number_list: list, start: datetime, end: datetime)-> List[dict]:
+async def fetch_beacon(train_number_list: list, start: datetime, end: datetime)-> Sequence:
     # Convert the list of train numbers into a string format suitable for SQL IN clause
     train_number_str = ",".join(f"'{item}'" for item in train_number_list)
-    
+
     query = f"""
-    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "ReferencedLocationDateTime", "MessageDateTime"
+    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "CountryCodeISO", "MessageDateTime"
     FROM "{DB_SCHEMA}"."TrainRunningInformation_MainTable_4005"
     WHERE ("OTI_OperationalTrainNumber" IN ({train_number_str}) OR "ROTN_OTI_OperationalTrainNumber" IN ({train_number_str}))
     AND "LocationDateTime" BETWEEN :start AND :end
@@ -87,7 +89,7 @@ async def fetch_beacon(train_number_list: list, start: datetime, end: datetime)-
 
 # Initial fetch
 # Rame Table Operations.
-async def fetch_rame_info() -> List[dict]:
+async def fetch_rame_info() -> Sequence:
     query = f"""
     SELECT "Id", "RameNumber"
     FROM "{DB_SCHEMA}"."Rames"
@@ -95,7 +97,7 @@ async def fetch_rame_info() -> List[dict]:
     return await database.fetch_all(query=query)
 
 # Circulations Table fetch by TravelDate
-async def fetch_circulation_info(date: Union[datetime, str]) -> List[dict]:
+async def fetch_circulation_info(date: Union[datetime, str]) -> Sequence:
     '''
     Fetch all circulations for a given travel date.
     
@@ -117,7 +119,7 @@ async def fetch_circulation_info(date: Union[datetime, str]) -> List[dict]:
     return await database.fetch_all(query=query, values={"travel_date": date})
 
 # PrimaryLocation Operations.
-async def fetch_primary_location(date: datetime, beacon_country: list) -> List[dict]:
+async def fetch_primary_location(date: datetime, beacon_country: list) -> Sequence:
     '''
     Commets: The database table is not well designed.
 
@@ -127,7 +129,7 @@ async def fetch_primary_location(date: datetime, beacon_country: list) -> List[d
     country_code_str = ",".join(f"'{item}'" for item in beacon_country)
 
     query = f"""
-    SELECT "Latitude", "Longitude", "Primary_Location_Code", "Start_Validity", "Country_ISO_code"
+    SELECT "Country_ISO_code", "Primary_Location_Code", "Latitude", "Longitude", "Start_Validity"
     FROM "{DB_SCHEMA}"."PrimaryLocation"
     WHERE (CAST("End_Validity" AS DATE) > :date OR "End_Validity" IS NULL)
     AND "Country_ISO_code" IN ({country_code_str})
@@ -137,4 +139,4 @@ async def fetch_primary_location(date: datetime, beacon_country: list) -> List[d
 # TODO: Think about what need to be return to database
 async def save_processed_data(data):
     query = "INSERT INTO your_table_name(field1, field2, ...) VALUES(:field1, :field2, ...)"
-    await database.execute(query=query, values=data.dict())
+    return await database.execute(query=query, values=data.dict())

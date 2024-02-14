@@ -1,66 +1,66 @@
-# kf_tracker.py
+# tracker.py
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import List
+import time
+import pytz
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from func.database import fetch_circulation_info
 from func.train_service import (
     train_init,
     service_init,
     get_realtime_train_data,
     get_realtime_train_data_geolocation,
-    update_train_positions,
+    fetch_train_positions,
     beacon_init
 )
-from func.logger import StructuredLogger, SystemStatus
+from func.system import SystemLogger, SystemStatus
 
 # Create a FastAPI app
 tracker = APIRouter()
 
 # Create a system state with a logger
-app = SystemStatus()
-app.logger = StructuredLogger('tracker', '/logs')
+sys = SystemStatus(system_date = "2024-02-07 01:00:00",
+                   query_step = timedelta(minutes=30),
+                   utm_zone = 31,
+                   updating = True,
+                   beacon_country = ["GB", "FR", "BE", "NL", "DE"],
+                   local_timezone = pytz.timezone('Europe/Paris'),
+                   system_timezone = pytz.timezone('UTC'),) # type: ignore
 
-# Initialize the system state
-start_date = "2024-02-13" # os.getenv("START_DATE", "2024-02-10")
-app.system_date = datetime.strptime(start_date, '%Y-%m-%d')
-app.last_gps_t = app.system_date
-app.last_beacon_t = app.system_date
-app.updating = True
+sys.logger = SystemLogger('tracker', '/logs')
 
-# Initialize the trains mapping table (Rame table) / train circulations table / Beacn mapping table
-app.trains_mapping_table = {}
-app.trains_dict = {}
-app.beacon_country = ["GB", "FR", "BE", "NL", "DE"]
-app.beacon_mapping_table = {}
+# Change it to True for real-time service
+sys.updating = True
 
 async def init_tracker():
-    print("Application - KF tracker - is starting...")
+    t_0 = time.time()
 
     # (1) system initialtion. It will fetch and update the train dictionary
-    print(f"Background task initialized with date: {app.system_date}")
+    print(f"-----Application - KF tracker - initialized with date: {sys.system_date}")
 
     # Run beacon_init and train_init concurrently, and then service_init
     await asyncio.gather(
-        beacon_init(app),
-        train_init(app)
+        beacon_init(sys),
+        train_init(sys)
     )
-    await service_init(app)
-
-    # (2) Start background task for continuous updates for every 10 seconds.
+    await service_init(sys)
+    sys.t_1 = time.time()
+    print(f"-----Application - KF tracker - is initialized in {sys.t_1 - t_0:.2f} seconds.")
+    
+    # (2) Start background task for continuous updates
     # TODO: to trigger an update task by database. 
     # Need configuration from database side, might Askok can help.
-    if app.updating:
-        #print('Positioning updating...for the following id', trains_dict.keys())
+    if sys.updating:
+        print('-----Application - KF tracker - Positioning updating...for the following id', sys.trains_dict.keys())
         asyncio.create_task(
-            update_train_positions(
-                app,
+            fetch_train_positions(
+                sys,
                 update_interval=10,
             )
         )
-
 
 # Endpoints for the KF tracker below
 # get all real-time train data
@@ -71,7 +71,7 @@ async def init_tracker():
              response_model=List[dict])
 async def get_trains():
     try:
-        return await get_realtime_train_data(app.trains_dict, rame_id=None)
+        return await get_realtime_train_data(sys.trains_dict, rame_id=None)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error fetching trains: {e}")
@@ -85,7 +85,7 @@ async def get_trains():
              deprecated=True)
 async def get_trains_geolocation():
     try:
-        return await get_realtime_train_data_geolocation(app.trains_dict)
+        return await get_realtime_train_data_geolocation(sys.trains_dict)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error fetching trains: {e}")
@@ -97,7 +97,7 @@ async def get_trains_geolocation():
              response_model=List[dict])
 async def get_train(rame_id: int):
     try:
-        return await get_realtime_train_data(app.trains_dict, rame_id)
+        return await get_realtime_train_data(sys.trains_dict, rame_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Train not found")
     except Exception as e:
@@ -110,13 +110,13 @@ async def get_train(rame_id: int):
               summary="Refresh the list of tracking trains by Rame/Circulation table.",
               description="This can catch the updates from circulation table, "
               "without stopping the real-time service. Do this when the train service has updated."
-              "The date is in the format 'YYYY-MM-DD'.",
+              "The date is in the format 'YYYY-MM-DD' (UTC).",
               response_model=dict)
-async def update_train(date: str = start_date):
+async def update_train(date: str = sys.system_date):
     try:
-        await train_init(app)
-        await service_init(app)
-        system_date = date
+        sys.system_date = date
+        await train_init(sys)
+        await service_init(sys)
         return {"ok": True}
     except Exception as e:
         raise HTTPException(
@@ -129,7 +129,7 @@ async def update_train(date: str = start_date):
 async def delete_train(rame_id: int):
     try:
         # remove rame_id from the train list
-        await app.trains_dict.pop(rame_id)
+        await sys.trains_dict.pop(rame_id)
         return {"ok": True}
     except KeyError:
         raise HTTPException(status_code=404, detail="Train not found")
@@ -141,7 +141,7 @@ async def delete_train(rame_id: int):
 @tracker.get("/circulations/",
              summary="Get circulations for a given travel date in %Y-%m-%d",
              response_model=List[dict])
-async def get_circulations(date: str = Query(default=start_date,
+async def get_circulations(date: str = Query(default=sys.system_date,
                                              description="Start datetime in the format YYYY-MM-DD")):
     try:
         if date is None:
@@ -158,15 +158,18 @@ async def get_circulations(date: str = Query(default=start_date,
              response_model=dict)
 async def get_status():
     try:
-        return {"Train in operaiton (id)": list(app.trains_dict.keys()), 
-                "Updating": app.updating,
-                "The last timestamp of GPS": app.last_gps_t.isoformat(),
-                "The last timestamp of Beacon": app.last_beacon_t.isoformat(),
-                "The length of GPS records (last cycle)": app.length_gps,
-                "The length of Beacon records (last cycle)": app.length_beacon,
-                "The initial date of system": app.system_date.isoformat(),
-                "The beacon country code": app.beacon_country,
-                "The trains_mapping_table": {obj.rame_id: obj.rame_number for obj in app.trains_mapping_table.values()},
+        return {"Train in operaiton (id)": list(sys.trains_dict.keys()), 
+                "Updating": sys.updating,
+                "The system date": sys.system_date.isoformat(),
+                "The system timezone": sys.system_timezone.zone,
+                "The local timezone": sys.local_timezone.zone,
+                "The last timestamp of GPS": sys.last_gps_t.isoformat(),
+                "The last timestamp of Beacon": sys.last_beacon_t.isoformat(),
+                "The length of GPS records (last cycle)": sys.length_gps,
+                "The length of Beacon records (last cycle)": sys.length_beacon,
+                "The initial date of system": sys.system_date.isoformat(),
+                "The beacon country code": sys.beacon_country,
+                "The trains_mapping_dict": {obj.rame_id: obj.rame_number for obj in sys.trains_mapping_dict.values()},
                 }
 
     except Exception as e:
@@ -178,24 +181,24 @@ async def get_status():
 async def get_logs():
     try:
         # Check if the log file exists
-        if not os.path.exists(app.logger.log_dir):
+        if not os.path.exists(sys.logger.log_dir):
             raise HTTPException(status_code=404, detail="Log file not found.")
 
         new_logs = []
-        with open(app.logger.log_dir, "r") as file:
+        with open(sys.logger.log_dir, "r") as file:
             for line in file:
                 # Assuming each log entry starts with a timestamp in ISO format
                 log_time_str = line.split(' - ')[0]
                 try:
                     log_time = datetime.fromisoformat(log_time_str)
-                    if log_time > app.last_log_query_time:
+                    if log_time > sys.last_log_query_time:
                         new_logs.append(line.strip())
                 except ValueError:
                     # If the log line doesn't start with a timestamp, skip it
                     continue
 
         # Update the timestamp of the last query
-        app.last_log_query_time = datetime.now()
+        sys.last_log_query_time = datetime.now()
 
         return {"logs": new_logs}
     except Exception as e:

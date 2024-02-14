@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 import os
 from typing import List
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from func.database import fetch_circulation_info
 from func.train_service import (
     train_init,
@@ -13,23 +13,46 @@ from func.train_service import (
     service_init,
     historical_train_positions
 )
-from func.logger import StructuredLogger,SystemStatus
+from func.system import SystemLogger,SystemStatus
+import pytz
 
 # Create a FastAPI app
 replayer = APIRouter()
 
-# Create a system state with a logger
-app = SystemStatus()
-app.logger = StructuredLogger('tracker', '/logs')
+# Create a system state with a logger, a kalman filter
+sys = SystemStatus(query_step = timedelta(minutes=30),
+                   utm_zone = 31,
+                   updating = True,
+                   beacon_country = ["GB", "FR", "BE", "NL", "DE"],
+                   local_timezone = pytz.timezone('Europe/Paris'),
+                   system_timezone = pytz.timezone('UTC'))
 
-# Initialize the trains mapping table (Rame table) / train circulations table / Beacn mapping table
-app.trains_mapping_table = {}
-app.trains_dict = {}
-app.beacon_country = ["GB", "FR", "BE", "NL", "DE"]
-app.beacon_mapping_table = {}
+sys.logger = SystemLogger('replayer', '/logs')
 
-async def replay_data_generator(
-                                pace: int,
+
+async def test_replayer():
+    print('Test replayer')
+
+    # mock
+    start_date = datetime.strptime('2024-02-06 10:00:00', '%Y-%m-%d %H:%M:%S')
+    end_date = datetime.strptime('2024-02-06 10:15:00', '%Y-%m-%d %H:%M:%S')
+    rame_id = 13
+
+    sys.system_date = start_date
+    # Reinitialization - Fetch the trian and service information by trains_dict
+    await asyncio.gather(
+        beacon_init(sys),
+        train_init(sys)
+    )
+    await service_init(sys)
+    print('-----Starting quering for:', rame_id)
+    return await historical_train_positions(sys.trains_dict,
+                                                start_date,
+                                                end_date,
+                                                rame_id,
+                                                sys.beacon_mapping_df)
+
+async def replay_data_generator(pace: int,
                                 result: dict):
     # Example: just yielding a message every few seconds.
 
@@ -47,34 +70,35 @@ async def replay_data_generator(
               "The pace parameter is used to control the speed of the replay. The default pace is 1 second per record.",
               response_description="The stream feed of slected train.")
 async def start_replay(
-    start_date: datetime = Query(..., description="Start date for the replay"),
-    end_date: datetime = Query(default=None, description="End date for the replay"),
-    pace: int = Query(default=1, description="Pace of the replay in seconds"),
+    start_date: datetime = Query(default='2024-02-06 10:00:00', description="Start date (UTC) for the replay"),
+    end_date: datetime = Query(default='2024-02-06 10:15:00', description="End date (UTC) for the replay"),
+    pace: int = Query(default=2, description="Pace of the replay in seconds"),
     rame_id: int = Query(
-        default=None, description="Rame id for the replay")
+        default=13, description="Rame id for the replay")
 ):
 
-    print(f"Application - Replayer is starting... with date: {start_date}")
-    
-    app.system_date = start_date.date()
+    sys.system_date = pytz.utc.localize(start_date)
+    sys.end_timestamp = pytz.utc.localize(end_date)
 
-    if start_date.date():
-        # Reinitialization - Fetch the trian and service information by trains_dict
-        await asyncio.gather(
-        beacon_init(app),
-        train_init(app)
+    print(f"-----Application - Replayer - is starting... with date: {start_date}")
+
+
+    # Reinitialization - Fetch the trian and service information by trains_dict
+    await asyncio.gather(
+    beacon_init(sys),
+    train_init(sys)
     )
-        await service_init(app)
+    await service_init(sys)
 
     if not end_date:
-        end_date = start_date + datetime.timedelta(minutes=10)
+        end_date = sys.system_date + sys.query_step
 
     # Fetch all historical train data after KF
-    result = await historical_train_positions(app.trains_dict,
-                                              start_date,
-                                              end_date,
+    result = await historical_train_positions(sys.trains_dict,
+                                              sys.system_date,
+                                              sys.end_timestamp,
                                               rame_id,
-                                              app.beacon_mapping_table)
+                                              sys.beacon_mapping_df)
 
     return StreamingResponse(replay_data_generator(
                              pace,
@@ -83,31 +107,38 @@ async def start_replay(
 
 @replayer.get("/{rame_id}/",
               summary="Get historical data of the train rameid (trainset id).",
-              response_model=List[dict])
+              response_model=dict)
 async def get_train(
-    start_date: datetime = Query(..., description="Start datetime in the format YYYY-MM-DD HH:MM:SS"),
-    end_date: datetime = Query(..., description="End datetime in the format YYYY-MM-DD HH:MM:SS"),
-    rame_id: int = Path(..., description="The ID of the train")
+    start_date: datetime = Query(default='2024-02-06 10:00:00', description="Start datetime (UTC) in the format YYYY-MM-DD HH:MM:SS"),
+    end_date: datetime = Query(default='2024-02-06 10:00:00', description="End datetime (UTC) in the format YYYY-MM-DD HH:MM:SS"),
+    rame_id: int = Path(default=13, description="The ID of the train")
 ):
+
     try:
-        app.system_date = start_date
+        print(f"-----Application - Replayer - is starting... with date: {start_date}")
+
+        sys.system_date = pytz.utc.localize(start_date)
+        sys.end_timestamp = pytz.utc.localize(end_date)        
+        
         # Reinitialization - Fetch the trian and service information by trains_dict
         await asyncio.gather(
-            beacon_init(app),
-            train_init(app)
+            beacon_init(sys),
+            train_init(sys)
         )
-        await service_init(app)
+        await service_init(sys)
 
-        return await historical_train_positions(app.trains_dict,
-                                                start_date,
-                                                end_date,
+        print('-----Starting quering for (rame_id):', rame_id)
+
+        return await historical_train_positions(sys.trains_dict,
+                                                sys.system_date,
+                                                sys.end_timestamp,
                                                 rame_id,
-                                                app.beacon_mapping_table)
+                                                sys.beacon_mapping_df)
 
     except KeyError:
         raise HTTPException(status_code=404, detail="Train not found")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching train {rame_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching (train id) {rame_id}: {e}")
 
 
 @replayer.get("/{date}/circulations",
@@ -127,25 +158,26 @@ async def get_circulations(date: str = Path(..., description="Travel date in for
 async def get_logs():
     try:
         # Check if the log file exists
-        if not os.path.exists(app.logger.log_dir):
+        if not os.path.exists(sys.logger.log_dir):
             raise HTTPException(status_code=404, detail="Log file not found")
 
         new_logs = []
-        with open(app.logger.log_dir, "r") as file:
+        with open(sys.logger.log_dir, "r") as file:
             for line in file:
                 # Assuming each log entry starts with a timestamp in ISO format
                 log_time_str = line.split(' - ')[0]
                 try:
                     log_time = datetime.fromisoformat(log_time_str)
-                    if log_time > app.last_log_query_time:
+                    if log_time > sys.last_log_query_time:
                         new_logs.append(line.strip())
                 except ValueError:
                     # If the log line doesn't start with a timestamp, skip it
                     continue
 
         # Update the timestamp of the last query
-        app.last_log_query_time = datetime.now()
+        sys.last_log_query_time = datetime.now()
 
         return {"logs": new_logs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    

@@ -1,11 +1,12 @@
 # main.py
 from fastapi import FastAPI
 from apps.tracker import tracker, init_tracker
-from apps.replayer import replayer
+from apps.replayer import replayer, test_replayer
 from func.database import connect_to_database, disconnect_from_database
 import asyncio
+import logging
 
-#import logging
+#profiler = logging.getLogger(__name__)
 #logging.basicConfig(level=logging.DEBUG)
 
 app = FastAPI()
@@ -13,18 +14,15 @@ app = FastAPI()
 # connect with database
 @app.on_event("startup")
 async def startup_event():
-    # Perform startup tasks here
-    # e.g., connect to database
     await connect_to_database()
     # initialize data
     asyncio.create_task(init_tracker())
-
-    print("Application startup")
+    #asyncio.create_task(test_replayer())
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await disconnect_from_database()
-    print("FastAPI application is shutting down...")
+    print("-----FastAPI application is shutting down...")
 
 # Include the routers
 app.include_router(tracker, prefix="/realtime", tags=["Real-time tracker"])
