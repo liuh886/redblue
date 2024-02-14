@@ -77,7 +77,7 @@ async def fetch_beacon(train_number_list: list, start: datetime, end: datetime)-
     train_number_str = ",".join(f"'{item}'" for item in train_number_list)
     
     query = f"""
-    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "ReferencedLocationDateTime", "MessageDataTime"
+    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "ReferencedLocationDateTime", "MessageDateTime"
     FROM "{DB_SCHEMA}"."TrainRunningInformation_MainTable_4005"
     WHERE ("OTI_OperationalTrainNumber" IN ({train_number_str}) OR "ROTN_OTI_OperationalTrainNumber" IN ({train_number_str}))
     AND "LocationDateTime" BETWEEN :start AND :end

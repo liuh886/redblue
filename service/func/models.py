@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, List
 
+
 class CirculationInfo(BaseModel):
     RameId: str
     TrainNumber: str
@@ -10,6 +11,7 @@ class CirculationInfo(BaseModel):
     Destination: str
     Status: str
     # Include other fields from the Circulations table as needed
+
 
 class TrainModel(BaseModel):
     rame_id: int

@@ -2,25 +2,31 @@
 
 from fastapi import APIRouter, HTTPException, Query, Path
 from fastapi.responses import StreamingResponse
+import os
 from typing import List
 import asyncio
 from datetime import datetime
 from func.database import fetch_circulation_info
 from func.train_service import (
     train_init,
+    beacon_init,
     service_init,
     historical_train_positions
 )
+from func.logger import StructuredLogger,SystemStatus
 
 # Create a FastAPI app
 replayer = APIRouter()
 
-# Initialize the trains
-trains_mapping_table = {}
-# Initialize the train in service (circulations) dictionary
-trains_dict = {}
-initialization_date = None
+# Create a system state with a logger
+app = SystemStatus()
+app.logger = StructuredLogger('tracker', '/logs')
 
+# Initialize the trains mapping table (Rame table) / train circulations table / Beacn mapping table
+app.trains_mapping_table = {}
+app.trains_dict = {}
+app.beacon_country = ["GB", "FR", "BE", "NL", "DE"]
+app.beacon_mapping_table = {}
 
 async def replay_data_generator(
                                 pace: int,
@@ -49,26 +55,31 @@ async def start_replay(
 ):
 
     print(f"Application - Replayer is starting... with date: {start_date}")
+    
+    app.system_date = start_date.date()
 
-    if start_date.date() != initialization_date.date():
+    if start_date.date():
         # Reinitialization - Fetch the trian and service information by trains_dict
-        await train_init(trains_mapping_table)
-        await service_init(start_date, trains_dict, trains_mapping_table)
+        await asyncio.gather(
+        beacon_init(app),
+        train_init(app)
+    )
+        await service_init(app)
 
     if not end_date:
         end_date = start_date + datetime.timedelta(minutes=10)
 
     # Fetch all historical train data after KF
-    result = await historical_train_positions(trains_dict,
+    result = await historical_train_positions(app.trains_dict,
                                               start_date,
                                               end_date,
-                                              rame_id)
-    
+                                              rame_id,
+                                              app.beacon_mapping_table)
+
     return StreamingResponse(replay_data_generator(
                              pace,
                              result),
                              media_type="text/plain")
-
 
 @replayer.get("/{rame_id}/",
               summary="Get historical data of the train rameid (trainset id).",
@@ -79,15 +90,19 @@ async def get_train(
     rame_id: int = Path(..., description="The ID of the train")
 ):
     try:
-        if start_date != initialization_date:
+        app.system_date = start_date
         # Reinitialization - Fetch the trian and service information by trains_dict
-            await train_init(trains_mapping_table)
-            await service_init(start_date, trains_dict, trains_mapping_table)
+        await asyncio.gather(
+            beacon_init(app),
+            train_init(app)
+        )
+        await service_init(app)
 
-        return await historical_train_positions(trains_dict,
+        return await historical_train_positions(app.trains_dict,
                                                 start_date,
                                                 end_date,
-                                                rame_id)
+                                                rame_id,
+                                                app.beacon_mapping_table)
 
     except KeyError:
         raise HTTPException(status_code=404, detail="Train not found")
@@ -104,3 +119,33 @@ async def get_circulations(date: str = Path(..., description="Travel date in for
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error fetching circulations: {e}") from e
+
+
+@replayer.get("/logs/",
+             summary="Get the logs of the replayer service.",
+             response_model=dict)
+async def get_logs():
+    try:
+        # Check if the log file exists
+        if not os.path.exists(app.logger.log_dir):
+            raise HTTPException(status_code=404, detail="Log file not found")
+
+        new_logs = []
+        with open(app.logger.log_dir, "r") as file:
+            for line in file:
+                # Assuming each log entry starts with a timestamp in ISO format
+                log_time_str = line.split(' - ')[0]
+                try:
+                    log_time = datetime.fromisoformat(log_time_str)
+                    if log_time > app.last_log_query_time:
+                        new_logs.append(line.strip())
+                except ValueError:
+                    # If the log line doesn't start with a timestamp, skip it
+                    continue
+
+        # Update the timestamp of the last query
+        app.last_log_query_time = datetime.now()
+
+        return {"logs": new_logs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
