@@ -52,7 +52,7 @@ async def fetch_gps_update(last_timestamp: datetime, end_timestamp: datetime)-> 
 async def fetch_beacon_update(last_timestamp: datetime, end_timestamp: datetime)-> Sequence:
     # Construct the query similarly
     query = f"""
-    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "CountryCodeISO", "MessageDateTime"
+    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "CountryCodeISO", "MessageDateTime", "AgainstBooked"
     FROM "{DB_SCHEMA}"."TrainRunningInformation_MainTable_4005"
     WHERE "LocationDateTime" > :last_timestamp AND "LocationDateTime" <= :end_timestamp
     ORDER BY "LocationDateTime" ASC
@@ -79,7 +79,7 @@ async def fetch_beacon(train_number_list: list, start: datetime, end: datetime)-
     train_number_str = ",".join(f"'{item}'" for item in train_number_list)
 
     query = f"""
-    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "CountryCodeISO", "MessageDateTime"
+    SELECT "OTI_OperationalTrainNumber", "ROTN_OTI_OperationalTrainNumber", "LocationPrimaryCode", "LocationDateTime", "CountryCodeISO", "MessageDateTime", "AgainstBooked"
     FROM "{DB_SCHEMA}"."TrainRunningInformation_MainTable_4005"
     WHERE ("OTI_OperationalTrainNumber" IN ({train_number_str}) OR "ROTN_OTI_OperationalTrainNumber" IN ({train_number_str}))
     AND "LocationDateTime" BETWEEN :start AND :end

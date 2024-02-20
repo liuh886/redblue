@@ -6,8 +6,8 @@ from func.database import connect_to_database, disconnect_from_database
 import asyncio
 import logging
 
-#profiler = logging.getLogger(__name__)
-#logging.basicConfig(level=logging.DEBUG)
+profiler = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 app = FastAPI()
 
@@ -30,4 +30,4 @@ app.include_router(replayer, prefix="/replay", tags=["Replayer"])
 
 @app.get("/", response_model=dict)
 async def root():
-    return {"message": "Welcome to the API"}
+    return {"message": "Welcome to RedBlue API"}

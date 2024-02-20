@@ -22,7 +22,7 @@ from func.system import SystemLogger, SystemStatus
 tracker = APIRouter()
 
 # Create a system state with a logger
-sys = SystemStatus(system_date = "2024-02-07 01:00:00",
+sys = SystemStatus(system_date = "2024-02-07 03:00:00",
                    query_step = timedelta(minutes=30),
                    utm_zone = 31,
                    updating = True,
@@ -89,7 +89,6 @@ async def get_trains_geolocation():
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error fetching trains: {e}")
-
 
 # get train data by train rame id
 @tracker.get("/{rame_id}",
@@ -160,7 +159,7 @@ async def get_status():
     try:
         return {"Train in operaiton (id)": list(sys.trains_dict.keys()), 
                 "Updating": sys.updating,
-                "The system date": sys.system_date.isoformat(),
+                "The system date (initial)": sys.system_date.isoformat(),
                 "The system timezone": sys.system_timezone.zone,
                 "The local timezone": sys.local_timezone.zone,
                 "The last timestamp of GPS": sys.last_gps_t.isoformat(),
