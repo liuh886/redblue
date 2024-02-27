@@ -123,7 +123,7 @@ class MerweScaledSigmaPoints(object):
 
     def sigma_points(self, x, P):
         """ Computes the sigma points for an unscented Kalman filter
-        given the mean (x) and covariance(P) of the filter.
+        with given mean (x) and covariance(P) of the filter.
         Returns tuple of the sigma points and weights.
 
         Works with both scalar and array inputs:
@@ -138,7 +138,7 @@ class MerweScaledSigmaPoints(object):
             examples: 1, [1,2], np.array([1,2])
 
         P : scalar, or np.array
-           Covariance of the filter. If scalar, is treated as eye(n)*P.
+            Covariance of the filter. If scalar, is treated as eye(n)*P.
 
         Returns
         -------
@@ -164,10 +164,18 @@ class MerweScaledSigmaPoints(object):
         else:
             P = np.atleast_2d(P)
 
+        # scaling factor for the sigma points
         lambda_ = self.alpha**2 * (n + self.kappa) - n
+
+        # (1) The matrix square root here ensures that the spread of the sigma points
+        # matches the shape of the state distribution represented by P. 
+        # It turns P(squared covariance matrix) into uncertainty U.
         U = self.sqrt((lambda_ + n)*P)
 
+        # number of sigmas is n.
         sigmas = np.zeros((2*n+1, n))
+        
+        # (2) Use the first row to store the mean. And row k+1 n+k+1 to store the boundry points.
         sigmas[0] = x
         for k in range(n):
             # pylint: disable=bad-whitespace
@@ -179,6 +187,8 @@ class MerweScaledSigmaPoints(object):
 
     def _compute_weights(self):
         """ Computes the weights for the scaled unscented Kalman filter.
+        Many discussion on this part of algorithem, See
+        https://math.stackexchange.com/questions/796331/scaling-factor-and-weights-in-unscented-transform-ukf
 
         """
 
@@ -190,8 +200,6 @@ class MerweScaledSigmaPoints(object):
         self.Wm = np.full(2*n + 1, c)
         self.Wc[0] = lambda_ / (n + lambda_) + (1 - self.alpha**2 + self.beta)
         self.Wm[0] = lambda_ / (n + lambda_)
-
-
 
     def __repr__(self):
 

@@ -1,7 +1,7 @@
 # tracker.py
 
 from fastapi import APIRouter, HTTPException, Query
-from typing import List
+from typing import List, Union
 import time
 import pytz
 import os
@@ -17,14 +17,15 @@ from func.train_service import (
     beacon_init
 )
 from func.system import SystemLogger, SystemStatus
+from fastapi.responses import FileResponse
 
 # Create a FastAPI app
 tracker = APIRouter()
 
 # Create a system state with a logger
-sys = SystemStatus(system_date = "2024-02-07 03:00:00",
+# date in UTM
+sys = SystemStatus(system_date = "2024-02-08 06:00:00",
                    query_step = timedelta(minutes=30),
-                   utm_zone = 31,
                    updating = True,
                    beacon_country = ["GB", "FR", "BE", "NL", "DE"],
                    local_timezone = pytz.timezone('Europe/Paris'),
@@ -111,9 +112,12 @@ async def get_train(rame_id: int):
               "without stopping the real-time service. Do this when the train service has updated."
               "The date is in the format 'YYYY-MM-DD' (UTC).",
               response_model=dict)
-async def update_train(date: str = sys.system_date):
+async def update_train(date: Union[str, datetime] = sys.system_date):
     try:
-        sys.system_date = date
+        if isinstance(date, str):
+            date = datetime.strptime(date, '%Y-%m-%d')
+        sys.system_date = pytz.utc.localize(date)
+
         await train_init(sys)
         await service_init(sys)
         return {"ok": True}
@@ -202,3 +206,9 @@ async def get_logs():
         return {"logs": new_logs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    
+@tracker.get("/download-data/", summary="Download the tracker's processed data as a file.")
+async def download_data():
+    # Assuming 'processed_data.csv' is your large dataset file
+    file_path = "path/to/your/processed_data.csv"
+    return FileResponse(path=file_path, filename="processed_data.csv", media_type='text/csv')

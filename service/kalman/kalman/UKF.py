@@ -24,9 +24,10 @@ import sys
 import numpy as np
 from numpy import eye, zeros, dot, isscalar, outer
 from scipy.linalg import cholesky
-from filterpy.kalman import unscented_transform
-from filterpy.stats import logpdf
-from filterpy.common import pretty_str
+from kalman.kalman import unscented_transform
+from kalman.stats import logpdf
+from kalman.common import pretty_str
+from kalman.common import Q_discrete_white_noise_two_gps
 
 
 class UnscentedKalmanFilter(object):
@@ -399,14 +400,34 @@ class UnscentedKalmanFilter(object):
         if Q is None:
             Q = self.Q
 
-        # calculate sigma points for given mean and covariance
+
+        # Check if all eigenvalues are non-negative
+        is_positive_semi_definite = np.all(np.linalg.eigvals(self.P) >= 0)
+
+        # (1) calculate sigma points for given mean and covariance after fx
+        # it will use self.x and self.P (the initial condition if for the first time)
+        # These sigma points are designed to capture the mean and covariance of the state distribution effectively.
+        # Assuming P is your covariance matrix
+
+        #if not is_positive_semi_definite:
+        #    raise ValueError('P is not positive semi-definite')
+        
         self.compute_process_sigmas(dt, fx, **fx_args)
 
-        #and pass sigmas through the unscented transform to compute prior
+        if self.sigmas_f[0][4] > 110:
+            print('sigmas_f:', self.sigmas_f[0])
+
+        # (2) and pass sigmas through the unscented transform to compute prior
+        # This step integrates the information from the propagated sigma points to form a 
+        # coherent prediction of the state's future mean (x) and covariance (P).
         self.x, self.P = UT(self.sigmas_f, self.Wm, self.Wc, Q,
                             self.x_mean, self.residual_x)
-
-        # update sigma points to reflect the new variance of the points
+        
+        if self.x[4] > 110:
+            print('x:', self.x)
+        
+        # (3) update sigma points to reflect the new variance of the points
+        # ready for use in the next call to predict or update.
         self.sigmas_f = self.points_fn.sigma_points(self.x, self.P)
 
         # save prior
@@ -521,6 +542,9 @@ class UnscentedKalmanFilter(object):
         # calculate sigma points for given mean and covariance
         sigmas = self.points_fn.sigma_points(self.x, self.P)
 
+        # These sigma points are then propagated through the 
+        # nonlinear process model (fx) to predict their positions 
+        # at the next time step.
         for i, s in enumerate(sigmas):
             self.sigmas_f[i] = fx(s, dt, **fx_args)
 
@@ -612,10 +636,6 @@ class UnscentedKalmanFilter(object):
         if self._dim_z == 1:
             if not(isscalar(z) or (z.ndim == 1 and len(z) == 1)):
                 raise TypeError('zs must be a list of scalars or 1D, 1 element arrays')
-        else:
-            if len(z) != self._dim_z:
-                raise TypeError(
-                    'each element in zs must be a 1D array of length {}'.format(self._dim_z))
 
         z_n = len(zs)
 
@@ -643,14 +663,44 @@ class UnscentedKalmanFilter(object):
         # state covariances from Kalman Filter
         covariances = zeros((z_n, self._dim_x, self._dim_x))
 
-        for i, (z, r, dt, H, Q, Fx) in enumerate(zip(zs, Rs, dts, Hs, Qs, Fs)):
-            self.predict(dt=dt, UT=UT, Q=Q, fx=Fx)
+        for i, (z, r, dt, H, Fx, Q) in enumerate(zip(zs, Rs, dts, Hs, Fs, Qs)):
+            
+            self.Q = Q
+            # if initial, set self.x to the first measurement
+            if self.x[0] == 1:
+                self.x[0] = z[0]
+                self.x[1] = z[1]
+                self.x[2] = z[0]
+                self.x[3] = z[1]
+
+            try: # start prediction. Self.x and self.P will be updated, and sigmas will be calculated
+                self.predict(dt=dt, UT=UT, fx=Fx)
+            except np.linalg.LinAlgError as e:
+                print(e)
+                
+            # modify z in case of multiple measurements
+            #if H.__name__ == 'kf_hx_gps_front': 
+            ## the z is from the front gps
+            #    x_east_2 = z[0] - self.x[11] * np.sin(np.radians(self.x[10]))
+            #    y_north_2 = z[1] - self.x[11] * np.cos(np.radians(self.x[10]))
+            #    z.append(x_east_2)
+            #    z.append(y_north_2)
+            #elif H.__name__ == 'kf_hx_gps_back':
+            ## the z is from the rear gps
+            #    x_east_1 = z[0] + self.x[11] * np.sin(np.radians(self.x[10]))
+            #    y_north_1 = z[1] + self.x[11] * np.cos(np.radians(self.x[10]))
+            #    z.append(x_east_1)
+            #    z.append(y_north_1)
+
             self.update(z, r, UT=UT, hx=H)
             means[i, :] = self.x
             covariances[i, :, :] = self.P
 
             if saver is not None:
                 saver.save()
+
+        if means is None:
+            raise ValueError('no measurements in zs')
 
         return (means, covariances)
 

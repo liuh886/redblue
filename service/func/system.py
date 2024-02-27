@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 import time
 from pandas import DataFrame
 import pytz
+from pyproj import Transformer
 
 class SystemStatus:
     '''
@@ -16,7 +17,8 @@ class SystemStatus:
     def __init__(self, 
                  system_date = datetime.now(),
                  query_step = timedelta(minutes=30),
-                 utm_zone:int = 31,
+                 crs_en = "EPSG:3035",
+                 crs_latlon = "EPSG:4326",
                  updating:bool = True,
                  local_timezone = pytz.timezone('Europe/Paris'),
                  system_timezone = pytz.timezone('UTC'),
@@ -29,8 +31,9 @@ class SystemStatus:
         # Use the provided local time to set the initial values
         self.system_date = self.validate_system_date(system_date)
 
-        # set the UTM zone
-        self.utm_zone = utm_zone
+        # set the grid
+        self.to_en = Transformer.from_crs(crs_latlon, crs_en, always_xy=True)
+        self.to_lonlat = Transformer.from_crs(crs_en, crs_latlon, always_xy=True)
         self.updating = updating
         self.beacon_country = beacon_country
         

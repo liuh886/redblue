@@ -15,13 +15,15 @@ from func.train_service import (
 )
 from func.system import SystemLogger,SystemStatus
 import pytz
+from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
+import json
 
 # Create a FastAPI app
 replayer = APIRouter()
 
 # Create a system state with a logger, a kalman filter
 sys = SystemStatus(query_step = timedelta(minutes=30),
-                   utm_zone = 31,
                    updating = True,
                    beacon_country = ["GB", "FR", "BE", "NL", "DE"],
                    local_timezone = pytz.timezone('Europe/Paris'),
@@ -46,11 +48,8 @@ async def test_replayer():
     )
     await service_init(sys)
     print('-----Starting quering for:', rame_id)
-    return await historical_train_positions(sys.trains_dict,
-                                                start_date,
-                                                end_date,
-                                                rame_id,
-                                                sys.beacon_mapping_df)
+    return await historical_train_positions(rame_id,
+                                            sys)
 
 async def replay_data_generator(pace: int,
                                 result: dict):
@@ -94,11 +93,8 @@ async def start_replay(
         end_date = sys.system_date + sys.query_step
 
     # Fetch all historical train data after KF
-    result = await historical_train_positions(sys.trains_dict,
-                                              sys.system_date,
-                                              sys.end_timestamp,
-                                              rame_id,
-                                              sys.beacon_mapping_df)
+    result = await historical_train_positions(rame_id,
+                                              sys)
 
     return StreamingResponse(replay_data_generator(
                              pace,
@@ -106,11 +102,10 @@ async def start_replay(
                              media_type="text/plain")
 
 @replayer.get("/{rame_id}/",
-              summary="Get historical data of the train rameid (trainset id).",
-              response_model=dict)
+              summary="Get historical data of the train rameid (trainset id) in json.")
 async def get_train(
     start_date: datetime = Query(default='2024-02-06 10:00:00', description="Start datetime (UTC) in the format YYYY-MM-DD HH:MM:SS"),
-    end_date: datetime = Query(default='2024-02-06 10:00:00', description="End datetime (UTC) in the format YYYY-MM-DD HH:MM:SS"),
+    end_date: datetime = Query(default='2024-02-06 10:20:00', description="End datetime (UTC) in the format YYYY-MM-DD HH:MM:SS"),
     rame_id: int = Path(default=13, description="The ID of the train")
 ):
 
@@ -129,17 +124,13 @@ async def get_train(
 
         print('-----Starting quering for (rame_id):', rame_id)
 
-        return await historical_train_positions(sys.trains_dict,
-                                                sys.system_date,
-                                                sys.end_timestamp,
-                                                rame_id,
-                                                sys.beacon_mapping_df)
+        return await historical_train_positions(rame_id, sys)
+
 
     except KeyError:
         raise HTTPException(status_code=404, detail="Train not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching (train id) {rame_id}: {e}")
-
 
 @replayer.get("/{date}/circulations",
               summary="Get circulations for a given travel date in %Y-%m-%d",
@@ -180,4 +171,9 @@ async def get_logs():
         return {"logs": new_logs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
-    
+
+@replayer.get("/download-data/", summary="Download the Repalyer's processed data as a file.")
+async def download_data():
+    # Assuming 'processed_data.csv' is your large dataset file
+    file_path = "path/to/your/processed_data.csv"
+    return FileResponse(path=file_path, filename="processed_data.csv", media_type='text/csv')
