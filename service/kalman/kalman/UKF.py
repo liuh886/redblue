@@ -402,7 +402,7 @@ class UnscentedKalmanFilter(object):
 
 
         # Check if all eigenvalues are non-negative
-        is_positive_semi_definite = np.all(np.linalg.eigvals(self.P) >= 0)
+        #is_positive_semi_definite = np.all(np.linalg.eigvals(self.P) >= 0)
 
         # (1) calculate sigma points for given mean and covariance after fx
         # it will use self.x and self.P (the initial condition if for the first time)

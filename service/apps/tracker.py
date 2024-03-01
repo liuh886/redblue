@@ -25,7 +25,8 @@ tracker = APIRouter()
 # Create a system state with a logger
 # date in UTM
 sys = SystemStatus(system_date = "2024-02-08 06:00:00",
-                   query_step = timedelta(minutes=30),
+                   query_step = timedelta(minutes=10),
+                   update_int = 10,
                    updating = True,
                    beacon_country = ["GB", "FR", "BE", "NL", "DE"],
                    local_timezone = pytz.timezone('Europe/Paris'),
@@ -59,7 +60,7 @@ async def init_tracker():
         asyncio.create_task(
             fetch_train_positions(
                 sys,
-                update_interval=10,
+                update_interval=sys.update_int, # in seconds
             )
         )
 

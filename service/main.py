@@ -16,8 +16,8 @@ app = FastAPI()
 async def startup_event():
     await connect_to_database()
     # initialize data
-    asyncio.create_task(init_tracker())
-    #asyncio.create_task(test_replayer())
+    #asyncio.create_task(init_tracker())
+    asyncio.create_task(test_replayer())
 
 @app.on_event("shutdown")
 async def shutdown_event():

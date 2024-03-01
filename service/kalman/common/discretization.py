@@ -66,9 +66,9 @@ def order_by_derivative(Q, dim, block_size):
     return D
 
 def Q_discrete_white_noise_two_gps(dt=1,
-                                   var_acc= 0.02,  # Variance for acceleration
-                                   var_theta_1=0.05,
-                                   var_theta_2=0.05,  # Variance for heading
+                                   var_acc= 0.1**2,  # Variance for acceleration
+                                   var_theta_1=0.025**2,
+                                   var_theta_2=0.025**2,  # Variance for heading in rad
                                    ): # Variance para for lag
     """
     A covariance matrix must be symmetric and positive semi-definite. 
@@ -79,24 +79,24 @@ def Q_discrete_white_noise_two_gps(dt=1,
 
     # Positions and velocities for both GPS units using constant acceleration model assumptions
     # E1
-    Q[0, 0] = 0.25 * dt**4 * var_acc
-    Q[0, 4] = 0.5 * dt**3 * var_acc
-    Q[4, 0] = 0.5 * dt**3 * var_acc
+    Q[0, 0] = 0.25 * dt**3 * var_acc
+    Q[0, 4] = 0.5 * dt**2 * var_acc
+    Q[4, 0] = 0.5 * dt**2 * var_acc
 
     # N1
-    Q[1, 1] = 0.25 * dt**4 * var_acc
-    Q[1, 4] = 0.5 * dt**3 * var_acc
-    Q[4, 1] = 0.5 * dt**3 * var_acc
+    Q[1, 1] = 0.25 * dt**3 * var_acc
+    Q[1, 4] = 0.5 * dt**2 * var_acc
+    Q[4, 1] = 0.5 * dt**2 * var_acc
 
     # E2
-    Q[2, 2] = 0.25 * dt**4 * var_acc
-    Q[2, 4] = 0.5 * dt**3 * var_acc
-    Q[4, 2] = 0.5 * dt**3 * var_acc
+    Q[2, 2] = 0.25 * dt**3 * var_acc
+    Q[2, 4] = 0.5 * dt**2 * var_acc
+    Q[4, 2] = 0.5 * dt**2 * var_acc
 
     # N2
-    Q[3, 3] = 0.25 * dt**4 * var_acc
-    Q[3, 4] = 0.5 * dt**3 * var_acc
-    Q[4, 3] = 0.5 * dt**3 * var_acc
+    Q[3, 3] = 0.25 * dt**3 * var_acc
+    Q[3, 4] = 0.5 * dt**2 * var_acc
+    Q[4, 3] = 0.5 * dt**2 * var_acc
 
     # Velocities for both GPS units using constant acceleration model assumptions
     Q[4, 4] = dt**2 * var_acc

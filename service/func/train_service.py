@@ -14,6 +14,8 @@ import utm
 import time
 from pyproj import Transformer
 import scipy
+from scipy.stats import circmean
+import numpy as np
 
 class Train:
     '''
@@ -44,7 +46,7 @@ class Train:
         self.logger = None
         # identifier
         self.rame_id = rame_id   # id
-        self.length = None
+        self.length = 100   # the geometric length of the two GPS
         self.rame_number = rame_number  # trainset number
         self.systemid = []
         self.to_en : Transformer = None
@@ -59,7 +61,8 @@ class Train:
         self.north_h = None
         self.altitude = None
         self.speed = None 
-        self.heading_h = None  # GPS1
+        self.heading_h = None  # GPS1 - head
+        self.heading_t = None  # GPS2 - tail
         self.lock = None
         self.satellites = None
         self.quality = None
@@ -69,6 +72,8 @@ class Train:
         self.last_beacon_code = None
         # timestamp of the last update
         self.previous_timestamp = pd.Timestamp('1900-01-01', tz='UTC')
+        self.orientation_N72 = None
+        self.orientation_N27 = None
         # initial Kalman filter
         self.init_kf()
 
@@ -97,8 +102,6 @@ class Train:
             Define a custom mean function to handle the angles in x correctly.
             '''
             x = np.zeros(12)  # Adjust for your state vector length
-            sum_sin_6, sum_cos_6 = 0., 0.
-            sum_sin_8, sum_cos_8 = 0., 0.
 
             for i in range(len(sigmas)):
                 s = sigmas[i]
@@ -107,17 +110,12 @@ class Train:
                     if j not in [6, 8]:  # Skip the 6th and 8th elements (angles)
                         x[j] += s[j] * Wm[i]
 
-                # Handle 6th element (angle)
-                sum_sin_6 += np.sin(s[6]) * Wm[i]
-                sum_cos_6 += np.cos(s[6]) * Wm[i]
-
-                # Handle 8th element (angle)
-                sum_sin_8 += np.sin(s[8]) * Wm[i]
-                sum_cos_8 += np.cos(s[8]) * Wm[i]
-
-            # Compute mean angles
-            x[6] = np.arctan2(sum_sin_6, sum_cos_6)
-            x[8] = np.arctan2(sum_sin_8, sum_cos_8)
+            # Compute circular mean for angles
+            angle_indices = [6, 8]
+            for angle_index in angle_indices:
+                angles = sigmas[:, angle_index]
+                circular_mean = circmean(angles, high=np.pi, low=-np.pi)
+                x[angle_index] = circular_mean
 
             return x
 
@@ -134,21 +132,16 @@ class Train:
                 s = sigmas[i]
                 for j in linear_indices:
                     z[j] += s[j] * Wm[i]
-            
+                    
+            # When there is angle measurements
             if sigmas.shape[1] == 4:
-                # Handle angle elements
                 for angle_index in angle_indices:
-                    angle_sum_sin = 0.
-                    angle_sum_cos = 0.
-                    for i in range(len(sigmas)):
-                        s = sigmas[i]
-                        angle_sum_sin += np.sin(s[angle_index]) * Wm[i]
-                        angle_sum_cos += np.cos(s[angle_index]) * Wm[i]
-                    z[angle_index] = np.arctan2(angle_sum_sin, angle_sum_cos)
+                    angles = sigmas[:, angle_index]
+                    circular_mean = circmean(angles, high=np.pi, low=-np.pi)
+                    z[angle_index] = circular_mean
 
             return z
 
-        
         def residual_x(x, U):
             '''
             Define a custom residual function to handle the angles in x correctly.
@@ -166,7 +159,6 @@ class Train:
             y[8] = np.angle(np.exp(1j * y[8]))  # For heading 2
             return y
 
-
         def residual_z(a, b):
             '''
             Define a custom residual function to handle the angles in z correctly.
@@ -176,7 +168,6 @@ class Train:
             if len(y) >= 4:
                 y[3] = np.angle(np.exp(1j * y[3]))  # For angle measurement
             return y
-
 
         def get_near_psd(P, max_iter=100):
             '''
@@ -229,15 +220,20 @@ class Train:
             The sulutions is suggested by https://github.com/rlabbe/filterpy/issues/62
             If it fails, adjust the matrix and try again by get_near_psd.
             '''
+            
+            if np.any(np.isinf(P)) or np.any(np.isnan(P)):
+                raise ValueError("The matrix contains inf, none or nan.")
 
             try:
                 result = scipy.linalg.cholesky(P)
             except scipy.linalg.LinAlgError:
                 P = get_near_psd(P)
-            return scipy.linalg.cholesky(P)
+                result = scipy.linalg.cholesky(P)
+
+            return result
 
         points = MerweScaledSigmaPoints(n=12, 
-                                        alpha=0.9, 
+                                        alpha=1.5, 
                                         beta=0, 
                                         kappa=2,
                                         sqrt_method=sqrt_func,
@@ -254,7 +250,7 @@ class Train:
                                         residual_z=residual_z)
         
         # Kalman filter initial state
-        self.orientation = 0  # [deg] the vectors azimuth agle of physical tail to head. 
+        self.orientation_kf = 0  # [deg] the vectors azimuth agle of physical tail to head. angle of N72.
         self.cov_matrix_h = None
 
         # Kalman filter initial state
@@ -269,11 +265,11 @@ class Train:
                                   0,            # 7 rate of turning front GPS[rad/s]
                                   0,            # 8 heading back gps [rad]
                                   0,            # 9 rate of turning back gps [rad/s]
-                                  self.orientation,            # 10 orientation [deg]
-                                  295,            # 11 offset [s]
+                                  0,            # 10 orientation [deg]
+                                  0,            # 11 offset [s]
                                   ])
         else:
-            self.kf.x = np.array([1., 1., 1., 1., 0., 0.,0., 0., 0., 0., 0., 295.])
+            self.kf.x = np.array([1., 1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0.])
 
         # The uncertainty of the initial state
         self.kf.P = np.diag([2500, 2500, 2500, 2500, 250, 4, 3, 0.1, 3, 0.1, 10000, 25])
@@ -293,14 +289,14 @@ class Train:
         x_east, y_north, x_east_2, y_north_2, velocity, acc, heading_1, rate_of_turn_1, heading_2, rate_of_turn_2, orientation, lag = x
 
         # (1) Update velocity based on acceleration, Clip the acc/velocity to a reasonable range
-        acc = np.clip(acc, -5, 1)  # max acceleration 1 m/s^2
+        acc = np.clip(acc, -1.5, 0.8)  # max acceleration 1 m/s^2
         
         # add stationary mode
         if velocity < 0.01:
             velocity = 0
 
-        rate_of_turn_1 = np.clip(rate_of_turn_1, -0.05, 0.05)  # max rate of turn 10 rad.s^-1
-        rate_of_turn_2 = np.clip(rate_of_turn_2, -0.05, 0.05)  # max rate of turn 10 rad.s^-2
+        rate_of_turn_1 = np.clip(rate_of_turn_1, -0.025, 0.025)  # max rate of turn 10 rad.s^-1
+        rate_of_turn_2 = np.clip(rate_of_turn_2, -0.025, 0.025)  # max rate of turn 10 rad.s^-2
 
         # (2) Update headings based on rate of turn
         new_heading_1 = (heading_1 + rate_of_turn_1 * dt + np.pi) % (2 * np.pi) - np.pi
@@ -319,12 +315,15 @@ class Train:
 
         
         # (4) Update orientation/azimuth angle [degree] of the vector of physical tail to head
-        new_orientation = (np.degrees(np.arctan2((y_north - y_north_2 + dn_1 - dn_2), (x_east - x_east_2 + de_1 - de_2))) + 360) % 360
+        #new_orientation = (np.degrees(np.arctan2((y_north_2 - y_north - dn_1 + dn_2), (x_east_2 - x_east - de_1 + de_2))) + 360) % 360
+
+        new_orientation = (np.degrees(np.arctan2((x_east - x_east_2 + de_1 - de_2), (y_north - y_north_2 + dn_1 - dn_2))) + 360) % 360
         
         # (5) Update lag. The lag does not work for low speed.
         #new_lag = self.length / (velocity + 0.5 * acc * dt) 
         new_offset = np.sqrt((x_east_2 - x_east)**2 + (y_north_2 - y_north)**2)
-        new_offset = np.clip(new_offset, 250, 300)
+
+        new_offset = np.clip(new_offset, 100-30, 100+30)
 
         # Update the state vector with new values
         x_updated = x.copy()
@@ -355,22 +354,15 @@ class Train:
 
         Core to kf.x
         '''
-        # Unpack the state vector for readability
+        # Unpack the state vector
         x_east, y_north, x_east_2, y_north_2, velocity, acc, heading_1, rate_of_turn_1, heading_2, rate_of_turn_2, orientation, offset = x
-
-        # For GPS 2 (Rear)
-        #x_east_2 = x_east - offset * np.sin(np.radians(orientation))
-        #y_north_2 = y_north - offset * np.cos(np.radians(orientation))
 
         return [x_east, y_north, velocity, heading_1]
     
     def kf_hx_gps_back(self, x):
 
-        # Unpack the state vector for readability
+        # Unpack the state vector
         x_east, y_north, x_east_2, y_north_2, velocity, acc, heading_1, rate_of_turn_1, heading_2, rate_of_turn_2, orientation, offset = x
-        
-        #x_east = x_east_2 + offset * np.sin(np.radians(orientation))
-        #y_north = y_north_2 + offset * np.cos(np.radians(orientation))
 
         return [x_east_2, y_north_2, velocity, heading_2]
     
@@ -390,21 +382,66 @@ class Train:
                                               var_theta_1=0.1,
                                               var_theta_2=0.1)
         
-    def kf_orientation(self, condition: bool = False):
+    def init_orientation(self, df):
         '''
         Orientation of the train.
 
-        True for forward, False for backward.
+        When speed is low, the heading is hightly uncertain. 
+        Do not compare it with orientation.
         '''
+        # Determine the primary direction of movement
+        # Compute the differences without taking absolute values
+        df['time_difference'] = df['timestamp'].diff().dt.total_seconds().fillna(0)
 
-        if self.orientation is None:
-            self.orientation = 0
-        
-        # Toggle the orientation when
-        if condition:
-            self.orientation = not self.orientation
+        # Calculate the next 'e' and 'n' values based on the current speed and heading
+        df['next_e'] = df['east'] + df['time_difference'] * df['speed'] * np.sin(np.radians(df['heading']))
+        df['next_n'] = df['north'] + df['time_difference'] * df['speed'] * np.cos(np.radians(df['heading']))
 
-        return self.orientation
+        # Calculate the difference in 'n' and 'e' between the current and previous row
+        # if systemid_d == 0, the differnce is likely zero, becasue the movement 'next' has been removed.
+        # if systemid_d == 5, the difference is likely casued by offset.
+        # if systemid_d == -5, the difference is likely casued by offset.
+        df['difference_n'] = df['north'] - df['next_n'].shift(1)
+        df['difference_e'] = df['east'] - df['next_e'].shift(1)
+        df['offset'] = np.sqrt(df['difference_n']**2 + df['difference_e']**2)
+
+        # Calculate the orientation using the arctan2 function and normalize it to the range 0 to 360
+        # if systemid_d == 0, the orientation is nonsense.
+        # if systemid_d == 5, the orientation is from 7 to 2. N27 = arctan(E7-E2/N7-N2)
+        # if systemid_d == -5, the orientation is from 2 to 7. N72 = arctan(E2-E7/N2-N7)
+        df['orientation'] = (np.degrees(np.arctan2(df['difference_e'], df['difference_n'])) + 360) % 360
+        df['orientation_heading'] = (df['orientation'] - df['heading'] + 360) % 360
+
+        # Calculate the difference in 'systemid' between the current and previous row, it could be 0, -5, 5 for icemera.
+        df['systemid_d'] = df['systemid'] - df['systemid'].shift(1)
+
+        offset = 0.5 * (df[df['systemid_d'] == -5].offset.mean() + df[df['systemid_d'] == 5].offset.mean())
+        # The angle of vector 7-2 (tail-head) relative to N
+        orientation_N72 = circmean(df[df['systemid_d'] == -5]['orientation'], low=0, high=360)
+        # The angle of vector 2-7 (head-tail) relative to N
+        orientation_N27 = circmean(df[df['systemid_d'] == 5]['orientation'], low=0, high=360)
+
+        # update
+        self.orientation_N72 = orientation_N72 if orientation_N72 is not None else self.orientation_N72
+        self.orientation_N27 = orientation_N27 if orientation_N27 is not None else self.orientation_N27
+        self.length = offset if offset is not None else self.length
+            
+        count_not_invert = df[
+            (df['systemid_d'] == -5) &
+            (df['speed'].between(10, 100)) &
+            (df['orientation_heading'].between(-45, 45))
+        ].shape[0]
+
+        count_invert = df[
+            (df['systemid_d'] == -5) &
+            (df['speed'].between(10, 100)) &
+            (
+                (df['orientation_heading'].between(-180, -135)) |
+                (df['orientation_heading'].between(135, 180))
+            )
+        ].shape[0]
+
+        self.inverted += count_invert - count_not_invert
 
     def init_services(self):
     
@@ -419,11 +456,10 @@ class Train:
         self.destination = [] # str
         self.status = []  # str
         self.type = []  # str
-        self.orientation = []  # 
         self.um_train_number = []   # int
         self.um_position = []   # str
         self.total_distance = []  # int
-        self.inverted = []
+        self.inverted = 0
 
     def update_service(self, circulation_record: dict):
         '''
@@ -445,7 +481,14 @@ class Train:
             self.destination.append(circulation_record['Destination'])
             self.status.append(circulation_record['Status'])
             self.type.append(circulation_record['Type'])
-            self.inverted.append(circulation_record['Positioning'])  # use the last one
+            self.inverted = 0  # Default value
+            for i in circulation_record['Positioning']:
+                if i == 'Inverted':
+                    self.inverted += 1  # Assign 1 if 'Inverted' is found
+                elif i == 'Not Inverted':
+                    self.inverted -= 1
+                else:
+                    pass
             self.um_train_number.append(
                 um_train_number if um_train_number is not None else '')
             self.um_position.append(circulation_record['UMPosition'])
@@ -466,6 +509,7 @@ class Train:
 
         combined_data = []
 
+        # (1) Q
         # TODO: Adjust the values according to HDOP, VDOP, PDOP, and TDOP
         R_gps_front = np.diag([5**2, 5**2, (0.5)**2, (0.01)**2])  # Assuming 5m position error, 0.5 m/s speed error, 0.6 degree heading error
         R_gps_back = np.diag([5**2, 5**2, (0.5)**2, (0.01)**2])  # Assuming 5m position error, 0.5 m/s speed error, 0.6 degree heading error
@@ -474,8 +518,13 @@ class Train:
         R_beacon = np.diag([10**2, 10**2])  # Assuming 10m position error for beacon
 
         # TODO: (1) how to deal with a list of boolean values. (2) How to let KF realized it is inverted and add it in condtion.
+        
+        # (2) Orientation
+        # deal with orientation. There are chance that the initial orientation fails when GNSS missing, inadequate.
+        if len(new_gnss) > 20:
+            self.init_orientation(new_gnss)
 
-        if 'Inverted' in self.inverted:
+        if self.inverted > 0:
             back = self.kf_hx_gps_front
             front = self.kf_hx_gps_back
             R_back = R_gps_front
@@ -486,9 +535,9 @@ class Train:
             R_front = R_gps_front
             R_back = R_gps_back
 
-        # Process GNSS data
+        # (3) Process GNSS data
         if new_gnss is not None and not new_gnss.empty:
-            # (1) Process GNSS data into DataFrame
+            # Process GNSS data into DataFrame
             new_gnss.loc[:, 'sensor_type'] = 'GNSS'
             new_gnss.loc[:, 'sensor_id'] = new_gnss['systemid']
             new_gnss.loc[:,'H'] = [front if i%2 == 0 else back for i in new_gnss['sensor_id']]
@@ -496,7 +545,7 @@ class Train:
             new_gnss.loc[:,'z'] = [(row['east'], row['north'], row['speed'], np.deg2rad(row['heading'])) for index, row in new_gnss.iterrows()]
             combined_data.append(new_gnss[['timestamp', 'sensor_type', 'sensor_id', 'H', 'R', 'z']])
 
-        # Process Beacon data
+        # (4) Process Beacon data
         if new_beacons is not None and not new_beacons.empty:
             new_beacons.loc[:,'sensor_type'] = 'Beacon'
             new_beacons['sensor_id'] = new_beacons.index.get_level_values('primary_location_code')
@@ -505,7 +554,7 @@ class Train:
             new_beacons.loc[:,'z'] = [(row['east'], row['north']) for index, row in new_beacons.iterrows()]
             combined_data.append(new_beacons[['timestamp','sensor_type', 'sensor_id', 'H', 'R', 'z']])
 
-        # Merge and sort combined data
+        # (5) Merge and sort combined data
         try:    
             if combined_data != []:
                 
@@ -518,13 +567,13 @@ class Train:
                 # Filter duplicated signals
                 process_df = process_df.drop_duplicates(subset=['sensor_type', 'sensor_id', 'z'], keep='first')
 
-                # Set the initial dt to a reasonable value if it's too large or negative
+                # Set the initial dt to a reasonable value if it's too large (first time init) or negative
                 init_dt = (process_df['timestamp'].iloc[0] - self.previous_timestamp).total_seconds()  # Initial dt of this batch
                 init_dt = init_dt if ((init_dt > 0) and (init_dt < 1000)) else 0
 
                 process_df['dt'] = process_df['timestamp'].diff().dt.total_seconds().fillna(init_dt)
                 
-                # The initialization need not zero dt because dt are sometimes used as a denominator in Q.
+                # The initialization need none zero dt because dt are sometimes used as a denominator in Q.
                 process_df['dt'] = process_df['dt'].replace(0, 0.001)
 
                 # Construct Fs based on dt
@@ -549,7 +598,7 @@ class Train:
                             event="Signal_delayed",
                             object_name="Klamn filter batch process",
                             object_type="signal updates",
-                            content=f"Signal comes in delay, are dropped from the batch process:\n"
+                            content=f"Signal comes in delay, and been drop from the batch process:\n"
                             f"{unprocessed['timestamp', 'sensor_type', 'sensor_id']}",
                             status="Skiped",
                             value=len(unprocessed),
@@ -660,7 +709,7 @@ class Train:
                 self.speed = results['speed'].iloc[-1].item()
                 self.heading_h = results['heading_h'].iloc[-1].item()
                 self.heading_t = results['heading_t'].iloc[-1].item()
-                self.orientation = results['orientation'].iloc[-1].item()
+                self.orientation_kf = results['orientation'].iloc[-1].item()
                 self.cov_matrix_h = [results['cov_east_h'].iloc[-1].item(), 
                                      results['cov_north_h'].iloc[-1].item(), 
                                      results['cov_speed'].iloc[-1].item(), 
@@ -669,14 +718,17 @@ class Train:
                                      results['cov_north_t'].iloc[-1].item(),
                                      results['cov_speed'].iloc[-1].item(),
                                      results['cov_heading_t'].iloc[-1].item()]
+                # reset the inverted value when the speed is low.
+                if self.speed < 1:
+                    self.inverted = self.inverted/2
 
-                if self.orientation:
-                    if abs(self.orientation - self.heading_h) <= 30 or abs(self.orientation - self.heading_h) >= 330:
-                        self.inverted = ['Not Inverted']
-                    elif abs(self.orientation - self.heading_h) >= 150 and abs(self.orientation - self.heading_h) <= 210:
-                        self.inverted = ['Inverted']
-                    else:
-                        self.inverted = ['Not Sure']
+                # Contribute two inverted value, exclude the low speed when the heading is not accurate.
+                if self.orientation_kf and self.speed > 10:
+                    orientation_diff = abs(self.orientation_kf - self.heading_h)
+                    if orientation_diff <= 45 or orientation_diff >= 315:
+                        self.inverted -= 1
+                    elif orientation_diff >= 135 and orientation_diff <= 225:
+                        self.inverted += 1
         else:
             # No new data to update the train with
             return None, None
@@ -713,9 +765,9 @@ class Train:
         attrs_to_include = ['rame_id', 'rame_number', 'systemid', 'train_number', 'traveldate', 
                             'origin', 'destination', 'status', 'type','inverted' ,'um_train_number', 
                             'um_position', 'last_gps_t', 'last_beacon_t', 'last_beacon_code', 
-                            'lock', 'satellites', 'cov_matrix_h', 'latitute_h', 'longitude_h', 'orientation',
+                            'lock', 'satellites', 'cov_matrix_h', 'latitute_h', 'longitude_h', 'orientation_kf',
                             #'altitude', 
-                            'speed', 'heading_h']
+                            'speed', 'heading_h','heading_t']
         # Number of decimal places to round floating-point numbers to
         decimal_places = 6
 

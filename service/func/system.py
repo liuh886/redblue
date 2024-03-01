@@ -17,6 +17,7 @@ class SystemStatus:
     def __init__(self, 
                  system_date = datetime.now(),
                  query_step = timedelta(minutes=30),
+                 update_int = 10,
                  crs_en = "EPSG:3035",
                  crs_latlon = "EPSG:4326",
                  updating:bool = True,
@@ -34,13 +35,16 @@ class SystemStatus:
         # set the grid
         self.to_en = Transformer.from_crs(crs_latlon, crs_en, always_xy=True)
         self.to_lonlat = Transformer.from_crs(crs_en, crs_latlon, always_xy=True)
-        self.updating = updating
         self.beacon_country = beacon_country
         
         # The query time when the system is initiated, than will be updated
         self.last_gps_t = self.system_date
         self.last_beacon_t = self.system_date
-        self.query_step = query_step
+        # The query step in minutes
+        self.query_step = query_step  # in minutes
+        # The query interval in seconds
+        self.update_int = update_int  # in seconds
+        self.updating = updating
         self.end_timestamp = max(self.last_gps_t, self.last_beacon_t ) + self.query_step
 
         # Key tables
