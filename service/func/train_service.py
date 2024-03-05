@@ -16,6 +16,11 @@ from pyproj import Transformer
 import scipy
 from scipy.stats import circmean
 import numpy as np
+import osmnx as ox
+from shapely.geometry import Point, LineString
+import numpy as np
+from shapely.geometry import Point
+from graph import convert_1D_to_2D, GraphBeacon, convert_2D_to_1D
 
 class Train:
     '''
@@ -76,6 +81,33 @@ class Train:
         self.orientation_N27 = None
         # initial Kalman filter
         self.init_kf()
+        # Openrailwaymap mode. If ture, the train is constrained by the track.
+        self.orm_mode = False
+        self.acc_dist = 0
+        self.int_dist = 0
+        self.init_graph()
+        self.nearest_edge = None
+        self.nearest_node = None
+        self.dist_to_nearest_node = 0
+        self.dist_from_nearest_node = 0
+
+
+    def init_graph(self):
+        '''
+        Initialize the graph for the train object.
+        '''
+
+        # Init graph according to the train's service?
+
+        # Custom filter for railway tracks
+        custom_filter = '["railway"~"rail"]["usage"~"main"]'
+
+        # Download the railway network
+        railway_network = ox.graph_from_place(place_name, custom_filter=custom_filter)
+
+        # Project the network to an appropriate local CRS (optional but recommended for accuracy)
+        self.G = ox.project_graph(railway_network, to_crs='EPSG:4326')
+
 
     def init_kf(self):
         '''
@@ -265,15 +297,14 @@ class Train:
                                   0,            # 7 rate of turning front GPS[rad/s]
                                   0,            # 8 heading back gps [rad]
                                   0,            # 9 rate of turning back gps [rad/s]
-                                  0,            # 10 orientation [deg]
-                                  0,            # 11 offset [s]
+                                  self.acc_dist, # 10 odometer [m]
+                                  0,             # 11 offset [s]
                                   ])
         else:
             self.kf.x = np.array([1., 1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0.])
 
         # The uncertainty of the initial state
         self.kf.P = np.diag([2500, 2500, 2500, 2500, 250, 4, 3, 0.1, 3, 0.1, 10000, 25])
-
 
     def kf_fx(self, x, dt):
         '''
@@ -287,6 +318,7 @@ class Train:
         # Assuming a simple constant velocity model for demonstration
         # Extract state components for readability
         x_east, y_north, x_east_2, y_north_2, velocity, acc, heading_1, rate_of_turn_1, heading_2, rate_of_turn_2, orientation, lag = x
+        x_updated = x.copy()
 
         # (1) Update velocity based on acceleration, Clip the acc/velocity to a reasonable range
         acc = np.clip(acc, -1.5, 0.8)  # max acceleration 1 m/s^2
@@ -294,53 +326,64 @@ class Train:
         # add stationary mode
         if velocity < 0.01:
             velocity = 0
+        elif velocity > 100:
+            velocity = 100
 
+        # Update positions based on velocity and heading
+        new_velocity = np.clip(velocity + acc * dt, 0, 100)  # max speed 100m/s
+
+        # (2) Update headings based on rate of turn
         rate_of_turn_1 = np.clip(rate_of_turn_1, -0.025, 0.025)  # max rate of turn 10 rad.s^-1
         rate_of_turn_2 = np.clip(rate_of_turn_2, -0.025, 0.025)  # max rate of turn 10 rad.s^-2
 
-        # (2) Update headings based on rate of turn
         new_heading_1 = (heading_1 + rate_of_turn_1 * dt + np.pi) % (2 * np.pi) - np.pi
         new_heading_2 = (heading_2 + rate_of_turn_2 * dt + np.pi) % (2 * np.pi) - np.pi
 
-        # (3) Update positions based on velocity and heading
-        # For the front GPS (GPS 1)
-        de_1 = (velocity + 0.5 * dt * acc) * np.sin(heading_1 + 0.5 * rate_of_turn_1 * dt) * dt
-        dn_1 = (velocity + 0.5 * dt * acc) * np.cos(heading_1 + 0.5 * rate_of_turn_1 * dt) * dt
+        # TODO: accumulaative dist?
+        dist = (velocity + 0.5 * dt * acc) * dt
+        self.acc_dist += dist
 
-        # For the rear GPS (GPS 2), assuming it follows the same velocity but might have a different heading
-        de_2 = (velocity + 0.5 * dt * acc) * np.sin(heading_2 + 0.5 * rate_of_turn_2 * dt) * dt
-        dn_2 = (velocity + 0.5 * dt * acc) * np.cos(heading_2 + 0.5 * rate_of_turn_2 * dt) * dt
+        if self.orm_mode == True and velocity > 1:
 
-        new_velocity = np.clip(velocity + acc * dt, 0, 100)  # max speed 100m/s
+            # update graph
+            self.nearest_node, self.nearest_edge, self.dist_to_nearest_node, self.dist_from_nearest_node = convert_2D_to_1D(self.G, (x_east, y_north), heading_1)
+            _n,_e_,_dt,_df = convert_2D_to_1D(self.G, (x_east_2, y_north_2), heading_2)
 
-        
-        # (4) Update orientation/azimuth angle [degree] of the vector of physical tail to head
-        #new_orientation = (np.degrees(np.arctan2((y_north_2 - y_north - dn_1 + dn_2), (x_east_2 - x_east - de_1 + de_2))) + 360) % 360
+            e_1, n_1 = convert_1D_to_2D(self.G, self.nearest_node, self.nearest_edge, self.dist_from_nearest_node + dist, heading_1)
+            e_2, n_2 = convert_1D_to_2D(self.G, _n,_e_,_df + dist, heading_2)
 
-        new_orientation = (np.degrees(np.arctan2((x_east - x_east_2 + de_1 - de_2), (y_north - y_north_2 + dn_1 - dn_2))) + 360) % 360
-        
-        # (5) Update lag. The lag does not work for low speed.
-        #new_lag = self.length / (velocity + 0.5 * acc * dt) 
-        new_offset = np.sqrt((x_east_2 - x_east)**2 + (y_north_2 - y_north)**2)
+            x_updated[0] = e_1  # Update east position of GPS 1
+            x_updated[1] = n_1  # Update north position of GPS 1
+            x_updated[2] = e_2  # Update east position of GPS 2
+            x_updated[3] = n_2  # Update north position of GPS 2
 
-        new_offset = np.clip(new_offset, 100-30, 100+30)
+        else:
+            # when the train is in statinoary or the orm mode is off
 
-        # Update the state vector with new values
-        x_updated = x.copy()
-        x_updated[0] += de_1  # Update east position of GPS 1
-        x_updated[1] += dn_1  # Update north position of GPS 1
-        x_updated[2] += de_2  # Update east position of GPS 2
-        x_updated[3] += dn_2  # Update north position of GPS 2
+            de_1 = dist * np.sin(heading_1 + 0.5 * rate_of_turn_1 * dt) * dt
+            dn_1 = dist * np.cos(heading_1 + 0.5 * rate_of_turn_1 * dt) * dt
+            de_2 = dist * np.sin(heading_2 + 0.5 * rate_of_turn_2 * dt) * dt
+            dn_2 = dist * np.cos(heading_2 + 0.5 * rate_of_turn_2 * dt) * dt
+
+            x_updated[0] += de_1  # Update east position of GPS 1
+            x_updated[1] += dn_1  # Update north position of GPS 1
+            x_updated[2] += de_2  # Update east position of GPS 2
+            x_updated[3] += dn_2  # Update north position of GPS 2
+
+        # (3) Update orientation/azimuth angle [degree] of the vector of physical tail to head
+        self.orientation = (np.degrees(np.arctan2((x_east - x_east_2 + de_1 - de_2), (y_north - y_north_2 + dn_1 - dn_2))) + 360) % 360
+        self.offset = np.sqrt((x_east_2 - x_east)**2 + (y_north_2 - y_north)**2)
+
         x_updated[4] = new_velocity  # Update velocity
         x_updated[5] = acc  # Update acceleration
         x_updated[6] = new_heading_1  # Update heading for GPS 1
         x_updated[7] = rate_of_turn_1  # Update rate of turn for GPS 1
         x_updated[8] = new_heading_2  # Update heading for GPS 2
         x_updated[9] = rate_of_turn_2  # Update rate of turn for GPS 2
-        x_updated[10] = new_orientation  # Update orientation
-        x_updated[11] = new_offset  # Update lag
+        x_updated[10] = self.acc_dist  # Update acc distance
+        x_updated[11] = self.offset  # Update lag
 
-        # exclude the negative value
+        # (4) exclude the negative value
         for i in range(5):
             if x_updated[i] < 0:
                 # x[0] ==1 will tigger the reset by measurements.
@@ -389,13 +432,18 @@ class Train:
         When speed is low, the heading is hightly uncertain. 
         Do not compare it with orientation.
         '''
+        df = df.reset_index(drop=True)
+
         # Determine the primary direction of movement
-        # Compute the differences without taking absolute values
-        df['time_difference'] = df['timestamp'].diff().dt.total_seconds().fillna(0)
+        # Calculate the difference in 'systemid' between the current and previous row, it could be 0, -5, 5 for icemera.
+        df['systemid_d'] = df['systemid'] - df['systemid'].shift(1)
+        df['speed_d'] = df['speed'] - df['speed'].shift(1)
+        # the time from current row to the next record
+        df['time_d'] = (df['timestamp'].shift(-1) - df['timestamp']).dt.total_seconds().fillna(0)
 
         # Calculate the next 'e' and 'n' values based on the current speed and heading
-        df['next_e'] = df['east'] + df['time_difference'] * df['speed'] * np.sin(np.radians(df['heading']))
-        df['next_n'] = df['north'] + df['time_difference'] * df['speed'] * np.cos(np.radians(df['heading']))
+        df['next_e'] = df['east'] + df['time_d'] * (df['speed'] + df['speed_d']/2) * np.sin(np.radians(df['heading'])) 
+        df['next_n'] = df['north'] + df['time_d'] * (df['speed'] + df['speed_d']/2) * np.cos(np.radians(df['heading']))
 
         # Calculate the difference in 'n' and 'e' between the current and previous row
         # if systemid_d == 0, the differnce is likely zero, becasue the movement 'next' has been removed.
@@ -412,9 +460,6 @@ class Train:
         df['orientation'] = (np.degrees(np.arctan2(df['difference_e'], df['difference_n'])) + 360) % 360
         df['orientation_heading'] = (df['orientation'] - df['heading'] + 360) % 360
 
-        # Calculate the difference in 'systemid' between the current and previous row, it could be 0, -5, 5 for icemera.
-        df['systemid_d'] = df['systemid'] - df['systemid'].shift(1)
-
         offset = 0.5 * (df[df['systemid_d'] == -5].offset.mean() + df[df['systemid_d'] == 5].offset.mean())
         # The angle of vector 7-2 (tail-head) relative to N
         orientation_N72 = circmean(df[df['systemid_d'] == -5]['orientation'], low=0, high=360)
@@ -425,23 +470,25 @@ class Train:
         self.orientation_N72 = orientation_N72 if orientation_N72 is not None else self.orientation_N72
         self.orientation_N27 = orientation_N27 if orientation_N27 is not None else self.orientation_N27
         self.length = offset if offset is not None else self.length
-            
+
+        # not inverted (7-2) if the orientation is close to the heading
         count_not_invert = df[
             (df['systemid_d'] == -5) &
-            (df['speed'].between(10, 100)) &
-            (df['orientation_heading'].between(-45, 45))
+            (df['speed'].between(2, 100)) &
+            (df['orientation_heading'].between(0, 45)) |
+            (df['orientation_heading'].between(315, 360)) 
         ].shape[0]
 
+        # inverted (2-7) if the orientation is between 135 and 225
         count_invert = df[
             (df['systemid_d'] == -5) &
-            (df['speed'].between(10, 100)) &
-            (
-                (df['orientation_heading'].between(-180, -135)) |
-                (df['orientation_heading'].between(135, 180))
+            (df['speed'].between(2, 100)) &
+            (df['orientation_heading'].between(135, 225)
             )
         ].shape[0]
 
-        self.inverted += count_invert - count_not_invert
+        # accumulate the inverted chance
+        self.inverted += (count_invert - count_not_invert) /2 
 
     def init_services(self):
     
@@ -511,8 +558,8 @@ class Train:
 
         # (1) Q
         # TODO: Adjust the values according to HDOP, VDOP, PDOP, and TDOP
-        R_gps_front = np.diag([5**2, 5**2, (0.5)**2, (0.01)**2])  # Assuming 5m position error, 0.5 m/s speed error, 0.6 degree heading error
-        R_gps_back = np.diag([5**2, 5**2, (0.5)**2, (0.01)**2])  # Assuming 5m position error, 0.5 m/s speed error, 0.6 degree heading error
+        R_gps_front = np.diag([5**2, 5**2, (0.5)**2, (0.03)**2])  # Assuming 5m position error, 0.5 m/s speed error, 1. degree heading error
+        R_gps_back = np.diag([5**2, 5**2, (0.5)**2, (0.03)**2])  # Assuming 5m position error, 0.5 m/s speed error, 0.6 degree heading error
         
         # TODO: Adjust the values according to the beacon's accuracy
         R_beacon = np.diag([10**2, 10**2])  # Assuming 10m position error for beacon
@@ -521,7 +568,8 @@ class Train:
         
         # (2) Orientation
         # deal with orientation. There are chance that the initial orientation fails when GNSS missing, inadequate.
-        if len(new_gnss) > 20:
+        if new_gnss is not None and len(new_gnss) > 20:
+
             self.init_orientation(new_gnss)
 
         if self.inverted > 0:
@@ -560,7 +608,6 @@ class Train:
                 
                 combined_df = pd.concat(combined_data).sort_values(by='timestamp')
 
-                # Calculate dt and filter out delayed updates
                 # Drop signlas comes in delayed
                 process_df = combined_df[combined_df['timestamp'] > self.previous_timestamp].copy()
                 
@@ -571,10 +618,10 @@ class Train:
                 init_dt = (process_df['timestamp'].iloc[0] - self.previous_timestamp).total_seconds()  # Initial dt of this batch
                 init_dt = init_dt if ((init_dt > 0) and (init_dt < 1000)) else 0
 
-                process_df['dt'] = process_df['timestamp'].diff().dt.total_seconds().fillna(init_dt)
-                
-                # The initialization need none zero dt because dt are sometimes used as a denominator in Q.
-                process_df['dt'] = process_df['dt'].replace(0, 0.001)
+                # dt for kf.prediction
+                process_df['dt'] = process_df['timestamp'].shift(-1).diff().dt.total_seconds().fillna(init_dt)
+                # replace 0 because dt are sometimes used as a denominator in Q.
+                process_df['dt'] = process_df['dt'].replace(0, 0.000001)
 
                 # Construct Fs based on dt
                 zs = process_df['z'].tolist()
@@ -915,7 +962,10 @@ async def beacon_init(sys) -> None:
         )
         raise HTTPException(
             status_code=500, detail=f"Error fetching beacon data: {e}") from e
-
+    
+    # Initial graph
+    grap = GraphBeacon(sys.beacon_mapping_df)
+    sys.graph = grap
 
 async def service_init(sys) -> None:
     # Fetch the Circulation data for the given date

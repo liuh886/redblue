@@ -24,7 +24,7 @@ tracker = APIRouter()
 
 # Create a system state with a logger
 # date in UTM
-sys = SystemStatus(system_date = "2024-02-08 06:00:00",
+sys = SystemStatus(system_date = "2024-02-08 10:00:00",
                    query_step = timedelta(minutes=10),
                    update_int = 10,
                    updating = True,
@@ -169,9 +169,8 @@ async def get_status():
                 "The local timezone": sys.local_timezone.zone,
                 "The last timestamp of GPS": sys.last_gps_t.isoformat(),
                 "The last timestamp of Beacon": sys.last_beacon_t.isoformat(),
-                "The length of GPS records (last cycle)": sys.length_gps,
-                "The length of Beacon records (last cycle)": sys.length_beacon,
-                "The initial date of system": sys.system_date.isoformat(),
+                "The length of GPS records (last query)": sys.length_gps,
+                "The length of Beacon records (last query)": sys.length_beacon,
                 "The beacon country code": sys.beacon_country,
                 "The trains_mapping_dict": {obj.rame_id: obj.rame_number for obj in sys.trains_mapping_dict.values()},
                 }

@@ -9,3 +9,6 @@ seaborn
 plotly
 # Optional: Include other specific libraries your notebooks depend on
 # scipy
+
+# For working with OSM data
+osmnx 

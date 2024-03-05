@@ -18,7 +18,7 @@ class SystemStatus:
                  system_date = datetime.now(),
                  query_step = timedelta(minutes=30),
                  update_int = 10,
-                 crs_en = "EPSG:3035",
+                 crs_en = "EPSG:3857",
                  crs_latlon = "EPSG:4326",
                  updating:bool = True,
                  local_timezone = pytz.timezone('Europe/Paris'),
